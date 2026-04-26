@@ -3,6 +3,7 @@ import express from "express";
 import cors from "cors";
 import authRoutes from "./routes/auth.routes.js";
 import roomsRoutes from "./routes/rooms.routes.js";
+import usersRoutes from "./routes/users.routes.js";
 
 const app = express();
 const PORT = Number(process.env.PORT) || 3003;
@@ -16,6 +17,7 @@ app.get("/api/health", (_req, res) => {
 
 app.use("/api/auth", authRoutes);
 app.use("/api/rooms", roomsRoutes);
+app.use("/api/users", usersRoutes);
 
 app.listen(PORT, () => {
   console.log(`[Wire API] running on port ${PORT}`);

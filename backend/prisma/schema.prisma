@@ -33,15 +33,22 @@ model Room {
 }
 
 model RoomMember {
-  roomId   String   @map("room_id")
-  userId   String   @map("user_id")
-  joinedAt DateTime @default(now()) @map("joined_at")
+  roomId   String         @map("room_id")
+  userId   String         @map("user_id")
+  role     RoomMemberRole @default(MEMBER)
+  canWrite Boolean        @default(true) @map("can_write")
+  joinedAt DateTime       @default(now()) @map("joined_at")
 
   room Room @relation(fields: [roomId], references: [id], onDelete: Cascade)
   user User @relation(fields: [userId], references: [id], onDelete: Cascade)
 
   @@id([roomId, userId])
   @@map("room_members")
+}
+
+enum RoomMemberRole {
+  OWNER
+  MEMBER
 }
 
 model Message {
