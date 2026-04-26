@@ -1,0 +1,15 @@
+services:
+  wire-db:
+    image: postgres:16-alpine
+    container_name: wire-db-dev
+    environment:
+      POSTGRES_DB: wire
+      POSTGRES_USER: wire
+      POSTGRES_PASSWORD: wire_pass
+    ports:
+      - "5436:5432"
+    volumes:
+      - wire_pgdata:/var/lib/postgresql/data
+
+volumes:
+  wire_pgdata:

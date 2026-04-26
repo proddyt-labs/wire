@@ -1,0 +1,13 @@
+@import "tailwindcss";
+
+:root {
+  --wi-primary: #F472B6;
+  --wi-mid:     #EC4899;
+  --wi-dark:    #BE185D;
+  --wi-bg:      #1A0717;
+  --wi-muted:   #9D4F7E;
+}
+
+@layer base {
+  body { @apply bg-[var(--wi-bg)] text-pink-50 min-h-screen font-sans; }
+}
