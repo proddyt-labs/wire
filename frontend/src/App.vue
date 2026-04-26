@@ -21,6 +21,7 @@ onMounted(() => {
           <span class="ml-2 text-pink-50">wire</span>
         </div>
         <div class="flex items-center gap-3 text-sm text-pink-200/70">
+          <a href="https://proddyt.site" class="font-mono text-xs border border-blue-900/50 text-blue-400 hover:bg-blue-900/20 px-2 py-0.5 rounded transition-colors">&lt; · &gt;</a>
           <span>{{ auth.displayName }}</span>
           <button @click="auth.logout()" class="text-red-400 hover:text-red-300">Sair</button>
         </div>
