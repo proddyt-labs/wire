@@ -11,11 +11,15 @@ import { useSocketStore } from '@/stores/socket'
 const auth = useAuthStore()
 const socketStore = useSocketStore()
 
+// Connect socket synchronously in setup so socket.value is available before children mount
+const token = localStorage.getItem('auth_token')
+if (token) {
+  socketStore.connect(token)
+}
+
 onMounted(async () => {
-  const token = localStorage.getItem('auth_token')
   if (token) {
     await auth.fetchMe()
-    socketStore.connect(token)
   }
 })
 </script>

@@ -65,7 +65,7 @@
           @input="onTyping"
           class="flex-1 bg-pink-950/40 border border-pink-800/30 rounded-xl px-4 py-2.5 text-sm text-pink-50 placeholder-pink-400/30 focus:outline-none focus:border-pink-600/60 disabled:opacity-40 transition-colors"
         />
-        <button type="submit" :disabled="!draft.trim() || !canWrite || sending"
+        <button type="submit" :disabled="!draft.trim() || !canWrite"
           class="px-4 py-2.5 rounded-xl text-sm font-medium transition-colors"
           :class="draft.trim() && canWrite ? 'bg-pink-700 hover:bg-pink-600 text-pink-50' : 'bg-pink-950/40 text-pink-400/30 cursor-not-allowed'"
         >
@@ -136,7 +136,7 @@ import { ref, computed, onMounted, onUnmounted, nextTick, watch } from 'vue'
 import { useRoute } from 'vue-router'
 import { api } from '@/lib/api'
 import { useAuthStore } from '@/stores/auth'
-import { getSocket } from '@/lib/socket'
+import { useSocketStore } from '@/stores/socket'
 
 interface Message { id: string; content: string; author: string; createdAt: string }
 interface Member { userId: string; username: string; role: string; canWrite: boolean }
@@ -145,13 +145,13 @@ interface RoomInfo { id: string; name: string; isDirect: boolean; myRole: string
 const emit = defineEmits(['refresh'])
 const route = useRoute()
 const auth = useAuthStore()
+const socketStore = useSocketStore()
 const roomId = computed(() => route.params.id as string)
 
 const messages = ref<Message[]>([])
 const roomInfo = ref<RoomInfo | null>(null)
 const loading = ref(true)
 const draft = ref('')
-const sending = ref(false)
 const messagesEl = ref<HTMLElement>()
 const anchor = ref<HTMLElement>()
 const showSettings = ref(false)
@@ -181,40 +181,46 @@ function clearTyping() {
 }
 
 function onTyping() {
-  const socket = getSocket()
-  socket.emit('typing', { roomId: roomId.value, username: auth.displayName })
+  socketStore.emitTyping(roomId.value, auth.displayName)
   if (stopTypingTimer) clearTimeout(stopTypingTimer)
   stopTypingTimer = setTimeout(() => {
-    socket.emit('stop-typing', { roomId: roomId.value, username: auth.displayName })
+    socketStore.emitStopTyping(roomId.value, auth.displayName)
     stopTypingTimer = null
   }, 2000)
 }
 
 // ── Socket setup
+let offNewMessage: (() => void) | null = null
+
 function joinSocket(id: string) {
-  const socket = getSocket()
-  socket.emit('join-room', id)
-  socket.on('new-message', (msg: Message) => {
+  socketStore.joinRoom(id)
+  socketStore.markRead(id)
+
+  offNewMessage = socketStore.onNewMessage((msg: Message) => {
+    if (msg.roomId !== id) return
     if (!messages.value.find(m => m.id === msg.id)) {
       messages.value.push(msg)
       nextTick(() => anchor.value?.scrollIntoView({ behavior: 'smooth' }))
     }
+    socketStore.markRead(id)
   })
-  socket.on('user-typing', ({ username }: { username: string }) => {
+
+  socketStore.socket.value?.on('user-typing', ({ username }: { username: string }) => {
     if (username !== auth.displayName) addTyping(username)
   })
-  socket.on('user-stop-typing', ({ username }: { username: string }) => {
+  socketStore.socket.value?.on('user-stop-typing', ({ username }: { username: string }) => {
     removeTyping(username)
   })
 }
 
 function leaveSocket(id: string) {
-  const socket = getSocket()
-  socket.emit('leave-room', id)
-  socket.off('new-message')
-  socket.off('user-typing')
-  socket.off('user-stop-typing')
+  socketStore.leaveRoom(id)
+  offNewMessage?.()
+  offNewMessage = null
+  socketStore.socket.value?.off('user-typing')
+  socketStore.socket.value?.off('user-stop-typing')
   clearTyping()
+  if (stopTypingTimer) { clearTimeout(stopTypingTimer); stopTypingTimer = null }
 }
 
 // ── Data
@@ -245,21 +251,12 @@ async function loadAll() {
   }
 }
 
-async function send() {
-  if (!draft.value.trim() || sending.value) return
-  sending.value = true
+function send() {
+  if (!draft.value.trim()) return
   if (stopTypingTimer) { clearTimeout(stopTypingTimer); stopTypingTimer = null }
-  getSocket().emit('stop-typing', { roomId: roomId.value, username: auth.displayName })
-  try {
-    const { data } = await api.post<Message>(`/rooms/${roomId.value}/messages`, { content: draft.value.trim() })
-    // Own message added optimistically; socket broadcast handles other members
-    if (!messages.value.find(m => m.id === data.id)) messages.value.push(data)
-    draft.value = ''
-    await nextTick()
-    anchor.value?.scrollIntoView({ behavior: 'smooth' })
-  } finally {
-    sending.value = false
-  }
+  socketStore.emitStopTyping(roomId.value, auth.displayName)
+  socketStore.sendMessage(roomId.value, draft.value.trim())
+  draft.value = ''
 }
 
 async function renameRoom() {
@@ -321,3 +318,6 @@ onMounted(async () => {
 
 onUnmounted(() => leaveSocket(roomId.value))
 </script>
+
+<style scoped>
+</style>
