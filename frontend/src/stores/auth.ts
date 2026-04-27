@@ -6,6 +6,7 @@ export interface User {
   id: string;
   username: string;
   email: string;
+  isAdmin?: boolean;
 }
 
 const GATE_URL = import.meta.env.VITE_GATE_URL ?? "http://localhost:3100";

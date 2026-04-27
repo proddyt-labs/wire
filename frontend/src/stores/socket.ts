@@ -32,6 +32,16 @@ export const useSocketStore = defineStore("socket", () => {
     });
   }
 
+  function onRoomDeleted(handler: (payload: { roomId: string }) => void) {
+    socket.value?.on("room_deleted", handler);
+    return () => socket.value?.off("room_deleted", handler);
+  }
+
+  function onMessagesCleared(handler: (payload: { roomId: string }) => void) {
+    socket.value?.on("messages_cleared", handler);
+    return () => socket.value?.off("messages_cleared", handler);
+  }
+
   function disconnect() {
     socket.value?.disconnect();
     socket.value = null;
@@ -83,5 +93,7 @@ export const useSocketStore = defineStore("socket", () => {
     emitStopTyping,
     joinRoom,
     leaveRoom,
+    onRoomDeleted,
+    onMessagesCleared,
   };
 });

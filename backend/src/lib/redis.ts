@@ -56,3 +56,14 @@ export async function getUnread(userId: string, roomId: string): Promise<number>
   const val = await redis.get(`wire:unread:${userId}:${roomId}`);
   return parseInt(val ?? "0", 10);
 }
+
+export async function clearMessages(roomId: string): Promise<void> {
+  if (!redis) return;
+  await redis.del(`wire:messages:${roomId}`);
+}
+
+export async function deleteRoomData(roomId: string, memberIds: string[]): Promise<void> {
+  if (!redis) return;
+  const keys = [`wire:messages:${roomId}`, ...memberIds.map((u) => `wire:unread:${u}:${roomId}`)];
+  if (keys.length) await redis.del(...keys);
+}

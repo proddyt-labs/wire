@@ -8,7 +8,7 @@
         <span v-if="roomInfo?.members" class="text-xs text-pink-400/40 font-mono">{{ roomInfo.members.length }} membros</span>
       </div>
       <button
-        v-if="roomInfo?.myRole === 'OWNER'"
+        v-if="canManage"
         @click="showSettings = true"
         class="text-xs px-2.5 py-1 rounded-lg border border-pink-900/40 text-pink-400/60 hover:text-pink-300 hover:border-pink-700/50 transition-colors"
       >
@@ -127,13 +127,32 @@
           </div>
         </div>
       </div>
+
+      <!-- Danger zone -->
+      <div class="px-6 py-4 border-t border-pink-900/30 bg-red-950/10">
+        <p class="text-xs uppercase tracking-wider text-red-400/60 mb-3">Zona de risco</p>
+        <div class="flex flex-col gap-2">
+          <button
+            @click="clearRoomMessages"
+            class="w-full text-xs py-2 rounded-lg border border-amber-800/40 text-amber-300/80 hover:bg-amber-900/20 transition-colors"
+          >
+            🧹 Limpar todas as mensagens
+          </button>
+          <button
+            @click="deleteRoom"
+            class="w-full text-xs py-2 rounded-lg border border-red-800/40 text-red-300/80 hover:bg-red-900/20 transition-colors"
+          >
+            🗑 Excluir sala
+          </button>
+        </div>
+      </div>
     </div>
   </div>
 </template>
 
 <script setup lang="ts">
 import { ref, computed, onMounted, onUnmounted, nextTick, watch } from 'vue'
-import { useRoute } from 'vue-router'
+import { useRoute, useRouter } from 'vue-router'
 import { api } from '@/lib/api'
 import { useAuthStore } from '@/stores/auth'
 import { useSocketStore } from '@/stores/socket'
@@ -144,6 +163,7 @@ interface RoomInfo { id: string; name: string; isDirect: boolean; myRole: string
 
 const emit = defineEmits(['refresh'])
 const route = useRoute()
+const router = useRouter()
 const auth = useAuthStore()
 const socketStore = useSocketStore()
 const roomId = computed(() => route.params.id as string)
@@ -191,6 +211,8 @@ function onTyping() {
 
 // ── Socket setup
 let offNewMessage: (() => void) | null = null
+let offRoomDeleted: (() => void) | null = null
+let offMessagesCleared: (() => void) | null = null
 
 function joinSocket(id: string) {
   socketStore.joinRoom(id)
@@ -205,6 +227,17 @@ function joinSocket(id: string) {
     socketStore.markRead(id)
   })
 
+  offRoomDeleted = socketStore.onRoomDeleted(({ roomId: deletedId }) => {
+    if (deletedId === id) {
+      emit('refresh')
+      router.push('/')
+    }
+  })
+
+  offMessagesCleared = socketStore.onMessagesCleared(({ roomId: clearedId }) => {
+    if (clearedId === id) messages.value = []
+  })
+
   socketStore.socket?.on('user-typing', ({ username }: { username: string }) => {
     if (username !== auth.displayName) addTyping(username)
   })
@@ -215,8 +248,9 @@ function joinSocket(id: string) {
 
 function leaveSocket(id: string) {
   socketStore.leaveRoom(id)
-  offNewMessage?.()
-  offNewMessage = null
+  offNewMessage?.(); offNewMessage = null
+  offRoomDeleted?.(); offRoomDeleted = null
+  offMessagesCleared?.(); offMessagesCleared = null
   socketStore.socket?.off('user-typing')
   socketStore.socket?.off('user-stop-typing')
   clearTyping()
@@ -227,6 +261,10 @@ function leaveSocket(id: string) {
 const canWrite = computed(() => {
   const me = roomInfo.value?.members.find(m => m.userId === auth.user?.id)
   return me?.canWrite ?? true
+})
+
+const canManage = computed(() => {
+  return roomInfo.value?.myRole === 'OWNER' || roomInfo.value?.myRole === 'ADMIN' || auth.user?.isAdmin === true
 })
 
 const nonMembers = computed(() => {
@@ -286,6 +324,22 @@ async function removeMember(userId: string) {
   if (roomInfo.value) {
     roomInfo.value.members = roomInfo.value.members.filter(m => m.userId !== userId)
   }
+}
+
+async function clearRoomMessages() {
+  if (!confirm('Limpar TODAS as mensagens desta sala? Esta ação não pode ser desfeita.')) return
+  await api.delete(`/rooms/${roomId.value}/messages`)
+  messages.value = []
+  showSettings.value = false
+}
+
+async function deleteRoom() {
+  const name = roomInfo.value?.name ?? 'esta sala'
+  if (!confirm(`Excluir "${name}" permanentemente? Esta ação não pode ser desfeita.`)) return
+  await api.delete(`/rooms/${roomId.value}`)
+  showSettings.value = false
+  emit('refresh')
+  router.push('/')
 }
 
 function isMe(msg: Message) { return msg.author === auth.displayName }

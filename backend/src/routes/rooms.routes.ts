@@ -8,11 +8,14 @@ const router = Router();
 
 router.use(requireAuth);
 
-// List rooms user is a member of
+// List rooms user is a member of (admin sees all)
 router.get("/", async (req, res) => {
   const user = getCurrentUser(req);
+  const where = user.isAdmin
+    ? { isDirect: false }
+    : { members: { some: { userId: user.id } }, isDirect: false };
   const rooms = await prisma.room.findMany({
-    where: { members: { some: { userId: user.id } }, isDirect: false },
+    where,
     include: {
       _count: { select: { messages: true } },
       members: { where: { userId: user.id }, select: { role: true } },
@@ -25,7 +28,7 @@ router.get("/", async (req, res) => {
       name: r.name,
       isDirect: r.isDirect,
       messageCount: r._count.messages,
-      myRole: r.members[0]?.role ?? "MEMBER",
+      myRole: r.members[0]?.role ?? (user.isAdmin ? "ADMIN" : "MEMBER"),
     }))
   );
 });
@@ -111,13 +114,13 @@ router.post("/", async (req, res) => {
   res.status(201).json({ id: room.id, name: room.name, isDirect: room.isDirect });
 });
 
-// Get room details + members
+// Get room details + members (admin can access any room)
 router.get("/:id", async (req, res) => {
   const user = getCurrentUser(req);
   const member = await prisma.roomMember.findUnique({
     where: { roomId_userId: { roomId: req.params.id, userId: user.id } },
   });
-  if (!member) { res.status(403).json({ error: "Not a member" }); return; }
+  if (!member && !user.isAdmin) { res.status(403).json({ error: "Not a member" }); return; }
   const room = await prisma.room.findUnique({
     where: { id: req.params.id },
     include: {
@@ -132,7 +135,7 @@ router.get("/:id", async (req, res) => {
     id: room.id,
     name: room.name,
     isDirect: room.isDirect,
-    myRole: member.role,
+    myRole: member?.role ?? (user.isAdmin ? "ADMIN" : "MEMBER"),
     members: room.members.map((m) => ({
       userId: m.userId,
       username: m.user.username,
@@ -142,26 +145,72 @@ router.get("/:id", async (req, res) => {
   });
 });
 
-// Update room info (owner only)
+async function isOwnerOrAdmin(roomId: string, userId: string, isAdmin: boolean): Promise<boolean> {
+  if (isAdmin) return true;
+  const member = await prisma.roomMember.findUnique({
+    where: { roomId_userId: { roomId, userId } },
+  });
+  return member?.role === "OWNER";
+}
+
+// Update room info (owner or admin)
 router.patch("/:id", async (req, res) => {
   const user = getCurrentUser(req);
-  const member = await prisma.roomMember.findUnique({
-    where: { roomId_userId: { roomId: req.params.id, userId: user.id } },
-  });
-  if (!member || member.role !== "OWNER") { res.status(403).json({ error: "Owner only" }); return; }
+  if (!(await isOwnerOrAdmin(req.params.id, user.id, user.isAdmin))) {
+    res.status(403).json({ error: "Owner only" }); return;
+  }
   const { name } = req.body as { name?: string };
   if (!name?.trim()) { res.status(400).json({ error: "name required" }); return; }
   const room = await prisma.room.update({ where: { id: req.params.id }, data: { name: name.trim() } });
   res.json({ id: room.id, name: room.name });
 });
 
-// Add member to room (owner only)
+// Delete room (owner or admin) — apaga membros, mensagens e dados Redis
+router.delete("/:id", async (req, res) => {
+  const user = getCurrentUser(req);
+  if (!(await isOwnerOrAdmin(req.params.id, user.id, user.isAdmin))) {
+    res.status(403).json({ error: "Owner only" }); return;
+  }
+  const room = await prisma.room.findUnique({
+    where: { id: req.params.id },
+    include: { members: { select: { userId: true } } },
+  });
+  if (!room) { res.status(404).json({ error: "Room not found" }); return; }
+  const memberIds = room.members.map((m) => m.userId);
+
+  await prisma.message.deleteMany({ where: { roomId: req.params.id } });
+  await prisma.roomMember.deleteMany({ where: { roomId: req.params.id } });
+  await prisma.room.delete({ where: { id: req.params.id } });
+
+  const { deleteRoomData } = await import("../lib/redis.js");
+  await deleteRoomData(req.params.id, memberIds);
+
+  getIO()?.to(`room:${req.params.id}`).emit("room_deleted", { roomId: req.params.id });
+  for (const uid of memberIds) {
+    getIO()?.to(uid).emit("room_deleted", { roomId: req.params.id });
+  }
+  res.json({ message: "deleted" });
+});
+
+// Clear all messages of a room (owner or admin)
+router.delete("/:id/messages", async (req, res) => {
+  const user = getCurrentUser(req);
+  if (!(await isOwnerOrAdmin(req.params.id, user.id, user.isAdmin))) {
+    res.status(403).json({ error: "Owner only" }); return;
+  }
+  await prisma.message.deleteMany({ where: { roomId: req.params.id } });
+  const { clearMessages } = await import("../lib/redis.js");
+  await clearMessages(req.params.id);
+  getIO()?.to(`room:${req.params.id}`).emit("messages_cleared", { roomId: req.params.id });
+  res.json({ message: "cleared" });
+});
+
+// Add member to room (owner or admin)
 router.post("/:id/members", async (req, res) => {
   const user = getCurrentUser(req);
-  const member = await prisma.roomMember.findUnique({
-    where: { roomId_userId: { roomId: req.params.id, userId: user.id } },
-  });
-  if (!member || member.role !== "OWNER") { res.status(403).json({ error: "Owner only" }); return; }
+  if (!(await isOwnerOrAdmin(req.params.id, user.id, user.isAdmin))) {
+    res.status(403).json({ error: "Owner only" }); return;
+  }
   const { userId } = req.body as { userId?: string };
   if (!userId) { res.status(400).json({ error: "userId required" }); return; }
   await prisma.roomMember.upsert({
@@ -172,13 +221,12 @@ router.post("/:id/members", async (req, res) => {
   res.json({ message: "added" });
 });
 
-// Update member permissions (owner only)
+// Update member permissions (owner or admin)
 router.patch("/:id/members/:userId", async (req, res) => {
   const user = getCurrentUser(req);
-  const owner = await prisma.roomMember.findUnique({
-    where: { roomId_userId: { roomId: req.params.id, userId: user.id } },
-  });
-  if (!owner || owner.role !== "OWNER") { res.status(403).json({ error: "Owner only" }); return; }
+  if (!(await isOwnerOrAdmin(req.params.id, user.id, user.isAdmin))) {
+    res.status(403).json({ error: "Owner only" }); return;
+  }
   const { role, canWrite } = req.body as { role?: string; canWrite?: boolean };
   const data: Record<string, unknown> = {};
   if (role === "OWNER" || role === "MEMBER") data.role = role;
@@ -190,14 +238,15 @@ router.patch("/:id/members/:userId", async (req, res) => {
   res.json({ message: "updated" });
 });
 
-// Remove member (owner only)
+// Remove member (owner or admin)
 router.delete("/:id/members/:userId", async (req, res) => {
   const user = getCurrentUser(req);
-  const owner = await prisma.roomMember.findUnique({
-    where: { roomId_userId: { roomId: req.params.id, userId: user.id } },
-  });
-  if (!owner || owner.role !== "OWNER") { res.status(403).json({ error: "Owner only" }); return; }
-  if (req.params.userId === user.id) { res.status(400).json({ error: "Owner cannot remove themselves" }); return; }
+  if (!(await isOwnerOrAdmin(req.params.id, user.id, user.isAdmin))) {
+    res.status(403).json({ error: "Owner only" }); return;
+  }
+  if (req.params.userId === user.id && !user.isAdmin) {
+    res.status(400).json({ error: "Owner cannot remove themselves" }); return;
+  }
   await prisma.roomMember.delete({
     where: { roomId_userId: { roomId: req.params.id, userId: req.params.userId } },
   });
@@ -210,7 +259,7 @@ router.get("/:id/messages", async (req, res) => {
   const member = await prisma.roomMember.findUnique({
     where: { roomId_userId: { roomId: req.params.id, userId: user.id } },
   });
-  if (!member) { res.status(403).json({ error: "Not a member" }); return; }
+  if (!member && !user.isAdmin) { res.status(403).json({ error: "Not a member" }); return; }
   const { redis, getMessages } = await import("../lib/redis.js");
   if (redis) {
     const msgs = await getMessages(req.params.id, 100);
