@@ -138,7 +138,7 @@ import { api } from '@/lib/api'
 import { useAuthStore } from '@/stores/auth'
 import { useSocketStore } from '@/stores/socket'
 
-interface Message { id: string; content: string; author: string; createdAt: string }
+interface Message { id: string; roomId?: string; content: string; author: string; createdAt: string }
 interface Member { userId: string; username: string; role: string; canWrite: boolean }
 interface RoomInfo { id: string; name: string; isDirect: boolean; myRole: string; members: Member[] }
 
@@ -205,10 +205,10 @@ function joinSocket(id: string) {
     socketStore.markRead(id)
   })
 
-  socketStore.socket.value?.on('user-typing', ({ username }: { username: string }) => {
+  socketStore.socket?.on('user-typing', ({ username }: { username: string }) => {
     if (username !== auth.displayName) addTyping(username)
   })
-  socketStore.socket.value?.on('user-stop-typing', ({ username }: { username: string }) => {
+  socketStore.socket?.on('user-stop-typing', ({ username }: { username: string }) => {
     removeTyping(username)
   })
 }
@@ -217,8 +217,8 @@ function leaveSocket(id: string) {
   socketStore.leaveRoom(id)
   offNewMessage?.()
   offNewMessage = null
-  socketStore.socket.value?.off('user-typing')
-  socketStore.socket.value?.off('user-stop-typing')
+  socketStore.socket?.off('user-typing')
+  socketStore.socket?.off('user-stop-typing')
   clearTyping()
   if (stopTypingTimer) { clearTimeout(stopTypingTimer); stopTypingTimer = null }
 }
