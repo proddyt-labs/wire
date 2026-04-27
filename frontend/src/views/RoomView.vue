@@ -35,13 +35,11 @@
             {{ msg.author }}
           </span>
           <div
-            class="max-w-xs lg:max-w-md px-3 py-2 rounded-2xl text-sm leading-relaxed"
+            class="max-w-xs lg:max-w-md px-3 py-2 rounded-2xl text-sm leading-relaxed whitespace-pre-wrap break-words"
             :class="isMe(msg)
               ? 'bg-pink-800/50 text-pink-50 rounded-br-sm'
               : 'bg-pink-950/60 border border-pink-900/30 text-pink-100 rounded-bl-sm'"
-          >
-            {{ msg.content }}
-          </div>
+          >{{ msg.content }}</div>
           <span class="text-xs text-pink-400/25 font-mono px-1 mt-0.5">{{ formatTime(msg.createdAt) }}</span>
         </div>
       </template>
@@ -58,12 +56,15 @@
     <!-- Input -->
     <div class="border-t border-pink-900/30 px-5 py-3 flex-shrink-0">
       <form @submit.prevent="send" class="flex gap-3 items-end">
-        <input
-          v-model="draft" type="text"
-          :placeholder="canWrite ? `Mensagem para ${roomInfo?.isDirect ? '@' : '#'}${roomInfo?.name ?? '...'}` : 'Somente leitura'"
+        <textarea
+          ref="inputEl"
+          v-model="draft"
+          rows="1"
+          :placeholder="canWrite ? `Mensagem para ${roomInfo?.isDirect ? '@' : '#'}${roomInfo?.name ?? '...'} — Shift+Enter para nova linha` : 'Somente leitura'"
           :disabled="!canWrite"
-          @input="onTyping"
-          class="flex-1 bg-pink-950/40 border border-pink-800/30 rounded-xl px-4 py-2.5 text-sm text-pink-50 placeholder-pink-400/30 focus:outline-none focus:border-pink-600/60 disabled:opacity-40 transition-colors"
+          @input="onInput"
+          @keydown="onKeydown"
+          class="flex-1 bg-pink-950/40 border border-pink-800/30 rounded-xl px-4 py-2.5 text-sm text-pink-50 placeholder-pink-400/30 focus:outline-none focus:border-pink-600/60 disabled:opacity-40 transition-colors resize-none max-h-40"
         />
         <button type="submit" :disabled="!draft.trim() || !canWrite"
           class="px-4 py-2.5 rounded-xl text-sm font-medium transition-colors"
@@ -174,6 +175,7 @@ const loading = ref(true)
 const draft = ref('')
 const messagesEl = ref<HTMLElement>()
 const anchor = ref<HTMLElement>()
+const inputEl = ref<HTMLTextAreaElement>()
 const showSettings = ref(false)
 const editName = ref('')
 const showAddMember = ref(false)
@@ -207,6 +209,25 @@ function onTyping() {
     socketStore.emitStopTyping(roomId.value, auth.displayName)
     stopTypingTimer = null
   }, 2000)
+}
+
+function autoResize() {
+  const el = inputEl.value
+  if (!el) return
+  el.style.height = 'auto'
+  el.style.height = Math.min(el.scrollHeight, 160) + 'px'
+}
+
+function onInput() {
+  onTyping()
+  autoResize()
+}
+
+function onKeydown(e: KeyboardEvent) {
+  if (e.key === 'Enter' && !e.shiftKey && !e.ctrlKey && !e.metaKey) {
+    e.preventDefault()
+    send()
+  }
 }
 
 // ── Socket setup
@@ -295,6 +316,7 @@ function send() {
   socketStore.emitStopTyping(roomId.value, auth.displayName)
   socketStore.sendMessage(roomId.value, draft.value.trim())
   draft.value = ''
+  nextTick(() => autoResize())
 }
 
 async function renameRoom() {
