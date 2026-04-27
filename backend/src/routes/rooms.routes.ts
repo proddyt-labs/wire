@@ -1,6 +1,8 @@
 import { Router } from "express";
 import { requireAuth, getCurrentUser } from "../middleware/auth.middleware.js";
 import { prisma } from "../lib/prisma.js";
+import { getIO } from "../lib/socket.js";
+import { canCommunicate } from "../lib/groups.js";
 
 const router = Router();
 
@@ -53,11 +55,17 @@ router.get("/dms", async (req, res) => {
   );
 });
 
-// Start or get existing DM
+// Start or get existing DM (verifica canCommunicate)
 router.post("/dms", async (req, res) => {
   const user = getCurrentUser(req);
   const { targetUserId } = req.body as { targetUserId?: string };
   if (!targetUserId) { res.status(400).json({ error: "targetUserId required" }); return; }
+
+  const allowed = await canCommunicate(user.id, targetUserId);
+  if (!allowed) {
+    res.status(403).json({ error: "no_common_group", hint: "envie uma solicitação de conversa primeiro" });
+    return;
+  }
 
   const existing = await prisma.room.findFirst({
     where: {
@@ -77,6 +85,7 @@ router.post("/dms", async (req, res) => {
     data: {
       name: `${user.username}, ${target.username}`,
       isDirect: true,
+      type: "dm",
       members: {
         create: [
           { userId: user.id, role: "OWNER" },
@@ -202,13 +211,19 @@ router.get("/:id/messages", async (req, res) => {
     where: { roomId_userId: { roomId: req.params.id, userId: user.id } },
   });
   if (!member) { res.status(403).json({ error: "Not a member" }); return; }
-  const messages = await prisma.message.findMany({
-    where: { roomId: req.params.id },
-    include: { author: { select: { username: true } } },
-    orderBy: { createdAt: "asc" },
-    take: 100,
-  });
-  res.json(messages.map((m) => ({ id: m.id, content: m.content, author: m.author.username, createdAt: m.createdAt })));
+  const { redis, getMessages } = await import("../lib/redis.js");
+  if (redis) {
+    const msgs = await getMessages(req.params.id, 100);
+    res.json(msgs);
+  } else {
+    const messages = await prisma.message.findMany({
+      where: { roomId: req.params.id },
+      include: { author: { select: { username: true } } },
+      orderBy: { createdAt: "asc" },
+      take: 100,
+    });
+    res.json(messages.map((m) => ({ id: m.id, content: m.content, author: m.author.username, createdAt: m.createdAt })));
+  }
 });
 
 // Post message
@@ -225,7 +240,9 @@ router.post("/:id/messages", async (req, res) => {
     data: { roomId: req.params.id, authorId: user.id, content: content.trim() },
     include: { author: { select: { username: true } } },
   });
-  res.status(201).json({ id: message.id, content: message.content, author: message.author.username, createdAt: message.createdAt });
+  const payload = { id: message.id, content: message.content, author: message.author.username, createdAt: message.createdAt };
+  getIO()?.to(`room:${req.params.id}`).emit("new-message", payload);
+  res.status(201).json(payload);
 });
 
 // Join room

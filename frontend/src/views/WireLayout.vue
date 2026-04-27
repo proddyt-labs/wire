@@ -27,8 +27,9 @@
             :class="$route.params.id === room.id ? 'bg-pink-900/30 text-pink-100' : 'text-pink-200/60 hover:bg-pink-900/20 hover:text-pink-100'"
           >
             <span class="font-mono text-pink-500/70 text-xs">#</span>
-            <span class="truncate">{{ room.name }}</span>
-            <span v-if="room.myRole === 'OWNER'" class="ml-auto text-xs text-pink-500/40">owner</span>
+            <span class="truncate flex-1">{{ room.name }}</span>
+            <span v-if="socketStore.unreadByRoom[room.id]" class="unread-badge">{{ socketStore.unreadByRoom[room.id] }}</span>
+            <span v-else-if="room.myRole === 'OWNER'" class="text-xs text-pink-500/40">owner</span>
           </RouterLink>
           <div v-if="!rooms.length" class="text-xs text-pink-400/30 px-2 py-2">Nenhuma sala ainda.</div>
         </nav>
@@ -46,10 +47,30 @@
             :class="$route.params.id === dm.id ? 'bg-pink-900/30 text-pink-100' : 'text-pink-200/60 hover:bg-pink-900/20 hover:text-pink-100'"
           >
             <span class="font-mono text-pink-400/50 text-xs">@</span>
-            <span class="truncate">{{ dm.name }}</span>
+            <span class="truncate flex-1">{{ dm.name }}</span>
+            <span v-if="socketStore.unreadByRoom[dm.id]" class="unread-badge">{{ socketStore.unreadByRoom[dm.id] }}</span>
           </RouterLink>
           <div v-if="!dms.length" class="text-xs text-pink-400/30 px-2 py-2">Sem DMs.</div>
         </nav>
+
+        <!-- Pessoas + Solicitações -->
+        <div class="border-t border-pink-900/20 mt-1 px-2 py-2 flex flex-col gap-0.5">
+          <RouterLink to="/users"
+            class="flex items-center gap-2 px-2 py-1.5 rounded-lg text-sm transition-colors"
+            :class="$route.path === '/users' ? 'bg-pink-900/30 text-pink-100' : 'text-pink-200/60 hover:bg-pink-900/20 hover:text-pink-100'"
+          >
+            <span class="font-mono text-pink-400/50 text-xs">@</span>
+            <span class="flex-1">Pessoas</span>
+          </RouterLink>
+          <RouterLink to="/requests"
+            class="flex items-center gap-2 px-2 py-1.5 rounded-lg text-sm transition-colors"
+            :class="$route.path === '/requests' ? 'bg-pink-900/30 text-pink-100' : 'text-pink-200/60 hover:bg-pink-900/20 hover:text-pink-100'"
+          >
+            <span class="font-mono text-pink-400/50 text-xs">«»</span>
+            <span class="flex-1">Solicitações</span>
+            <span v-if="socketStore.pendingRequests.length" class="unread-badge">{{ socketStore.pendingRequests.length }}</span>
+          </RouterLink>
+        </div>
       </div>
 
       <!-- User footer -->
@@ -83,21 +104,33 @@
     </div>
 
     <!-- New DM modal -->
-    <div v-if="showNewDm" class="fixed inset-0 bg-black/60 flex items-center justify-center z-50" @click.self="showNewDm = false">
+    <div v-if="showNewDm" class="fixed inset-0 bg-black/60 flex items-center justify-center z-50" @click.self="closeDmModal">
       <div class="bg-[#2a1020] border border-pink-900/50 rounded-2xl p-6 w-80 shadow-2xl">
-        <h2 class="text-base font-semibold text-pink-100 mb-4">Nova mensagem direta</h2>
-        <div class="flex flex-col gap-1 max-h-60 overflow-y-auto">
-          <button
-            v-for="u in allUsers" :key="u.id"
-            @click="startDm(u.id)"
-            class="flex items-center gap-3 px-3 py-2 rounded-lg hover:bg-pink-900/30 transition-colors text-left"
-          >
-            <div class="w-7 h-7 rounded-full bg-pink-900/60 flex items-center justify-center text-xs font-mono text-pink-300">
-              {{ u.username.charAt(0).toUpperCase() }}
-            </div>
-            <span class="text-sm text-pink-100">{{ u.username }}</span>
-          </button>
-          <div v-if="!allUsers.length" class="text-xs text-pink-400/40 text-center py-4">Nenhum outro usuário.</div>
+        <h2 class="text-base font-semibold text-pink-100 mb-3">Nova mensagem direta</h2>
+        <input
+          v-model="dmSearch"
+          @input="onDmSearch"
+          type="text"
+          placeholder="Buscar usuário…"
+          autofocus
+          class="w-full bg-pink-950/50 border border-pink-800/40 rounded-lg px-3 py-2 text-sm text-pink-50 placeholder-pink-400/30 focus:outline-none focus:border-pink-500 mb-2"
+        />
+        <div class="flex flex-col gap-0.5 max-h-52 overflow-y-auto">
+          <template v-if="dmSearch.length >= 2">
+            <button
+              v-for="u in dmResults" :key="u.id"
+              @click="startDm(u.id)"
+              class="flex items-center gap-3 px-3 py-2 rounded-lg hover:bg-pink-900/30 transition-colors text-left"
+            >
+              <div class="w-7 h-7 rounded-full bg-pink-900/60 flex items-center justify-center text-xs font-mono text-pink-300">
+                {{ u.username.charAt(0).toUpperCase() }}
+              </div>
+              <span class="text-sm text-pink-100">{{ u.username }}</span>
+            </button>
+            <div v-if="!dmResults.length && !dmSearching" class="text-xs text-pink-400/40 text-center py-4">Nenhum usuário encontrado.</div>
+            <div v-if="dmSearching" class="text-xs text-pink-400/30 text-center py-4 font-mono">buscando…</div>
+          </template>
+          <div v-else class="text-xs text-pink-400/30 text-center py-4 font-mono">Digite ao menos 2 letras para buscar.</div>
         </div>
       </div>
     </div>
@@ -109,20 +142,47 @@ import { ref, onMounted } from 'vue'
 import { RouterLink, RouterView, useRoute, useRouter } from 'vue-router'
 import { api } from '@/lib/api'
 import { useAuthStore } from '@/stores/auth'
+import { useSocketStore } from '@/stores/socket'
 
 interface Room { id: string; name: string; isDirect: boolean; messageCount: number; myRole: string }
 interface UserItem { id: string; username: string }
 
 const auth = useAuthStore()
+const socketStore = useSocketStore()
 const route = useRoute()
 const router = useRouter()
 
 const rooms = ref<Room[]>([])
 const dms = ref<Room[]>([])
-const allUsers = ref<UserItem[]>([])
 const showCreateRoom = ref(false)
 const showNewDm = ref(false)
 const newRoomName = ref('')
+
+// DM search
+const dmSearch = ref('')
+const dmResults = ref<UserItem[]>([])
+const dmSearching = ref(false)
+let dmDebounce: ReturnType<typeof setTimeout> | null = null
+
+function closeDmModal() {
+  showNewDm.value = false
+  dmSearch.value = ''
+  dmResults.value = []
+}
+
+function onDmSearch() {
+  if (dmDebounce) clearTimeout(dmDebounce)
+  if (dmSearch.value.length < 2) { dmResults.value = []; return }
+  dmSearching.value = true
+  dmDebounce = setTimeout(async () => {
+    try {
+      const { data } = await api.get<UserItem[]>(`/users?q=${encodeURIComponent(dmSearch.value)}`)
+      dmResults.value = data
+    } finally {
+      dmSearching.value = false
+    }
+  }, 300)
+}
 
 async function loadRooms() {
   const [{ data: r }, { data: d }] = await Promise.all([
@@ -144,14 +204,24 @@ async function createRoom() {
 
 async function startDm(targetUserId: string) {
   const { data } = await api.post<{ id: string }>('/rooms/dms', { targetUserId })
-  showNewDm.value = false
+  closeDmModal()
   await loadRooms()
   router.push(`/rooms/${data.id}`)
 }
 
-onMounted(async () => {
-  await loadRooms()
-  const { data } = await api.get<UserItem[]>('/users')
-  allUsers.value = data
-})
+onMounted(loadRooms)
 </script>
+
+<style scoped>
+.unread-badge {
+  background: var(--wr-primary, #F472B6);
+  color: #1A0D12;
+  font-size: 11px;
+  font-weight: 600;
+  border-radius: 20px;
+  padding: 1px 7px;
+  min-width: 18px;
+  text-align: center;
+  flex-shrink: 0;
+}
+</style>

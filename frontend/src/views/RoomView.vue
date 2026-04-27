@@ -48,13 +48,21 @@
       <div ref="anchor" />
     </div>
 
+    <!-- Typing indicator -->
+    <div class="px-5 h-5 flex-shrink-0 flex items-center">
+      <span v-if="whoIsTyping.length" class="text-xs text-pink-400/50 font-mono animate-pulse">
+        {{ whoIsTyping.join(', ') }} {{ whoIsTyping.length === 1 ? 'está' : 'estão' }} digitando…
+      </span>
+    </div>
+
     <!-- Input -->
-    <div class="border-t border-pink-900/30 px-5 py-4 flex-shrink-0">
+    <div class="border-t border-pink-900/30 px-5 py-3 flex-shrink-0">
       <form @submit.prevent="send" class="flex gap-3 items-end">
         <input
           v-model="draft" type="text"
-          :placeholder="canWrite ? `Mensagem para #${roomInfo?.name ?? '...'}` : 'Somente leitura'"
+          :placeholder="canWrite ? `Mensagem para ${roomInfo?.isDirect ? '@' : '#'}${roomInfo?.name ?? '...'}` : 'Somente leitura'"
           :disabled="!canWrite"
+          @input="onTyping"
           class="flex-1 bg-pink-950/40 border border-pink-800/30 rounded-xl px-4 py-2.5 text-sm text-pink-50 placeholder-pink-400/30 focus:outline-none focus:border-pink-600/60 disabled:opacity-40 transition-colors"
         />
         <button type="submit" :disabled="!draft.trim() || !canWrite || sending"
@@ -124,10 +132,11 @@
 </template>
 
 <script setup lang="ts">
-import { ref, computed, onMounted, nextTick, watch } from 'vue'
+import { ref, computed, onMounted, onUnmounted, nextTick, watch } from 'vue'
 import { useRoute } from 'vue-router'
 import { api } from '@/lib/api'
 import { useAuthStore } from '@/stores/auth'
+import { getSocket } from '@/lib/socket'
 
 interface Message { id: string; content: string; author: string; createdAt: string }
 interface Member { userId: string; username: string; role: string; canWrite: boolean }
@@ -151,6 +160,64 @@ const showAddMember = ref(false)
 const memberToAdd = ref('')
 const allUsers = ref<{ id: string; username: string }[]>([])
 
+// ── Typing
+const whoIsTyping = ref<string[]>([])
+const typingTimers: Record<string, ReturnType<typeof setTimeout>> = {}
+let stopTypingTimer: ReturnType<typeof setTimeout> | null = null
+
+function addTyping(username: string) {
+  if (!whoIsTyping.value.includes(username)) whoIsTyping.value.push(username)
+  if (typingTimers[username]) clearTimeout(typingTimers[username])
+  typingTimers[username] = setTimeout(() => removeTyping(username), 3000)
+}
+function removeTyping(username: string) {
+  whoIsTyping.value = whoIsTyping.value.filter(u => u !== username)
+  if (typingTimers[username]) { clearTimeout(typingTimers[username]); delete typingTimers[username] }
+}
+function clearTyping() {
+  whoIsTyping.value = []
+  Object.values(typingTimers).forEach(clearTimeout)
+  Object.keys(typingTimers).forEach(k => delete typingTimers[k])
+}
+
+function onTyping() {
+  const socket = getSocket()
+  socket.emit('typing', { roomId: roomId.value, username: auth.displayName })
+  if (stopTypingTimer) clearTimeout(stopTypingTimer)
+  stopTypingTimer = setTimeout(() => {
+    socket.emit('stop-typing', { roomId: roomId.value, username: auth.displayName })
+    stopTypingTimer = null
+  }, 2000)
+}
+
+// ── Socket setup
+function joinSocket(id: string) {
+  const socket = getSocket()
+  socket.emit('join-room', id)
+  socket.on('new-message', (msg: Message) => {
+    if (!messages.value.find(m => m.id === msg.id)) {
+      messages.value.push(msg)
+      nextTick(() => anchor.value?.scrollIntoView({ behavior: 'smooth' }))
+    }
+  })
+  socket.on('user-typing', ({ username }: { username: string }) => {
+    if (username !== auth.displayName) addTyping(username)
+  })
+  socket.on('user-stop-typing', ({ username }: { username: string }) => {
+    removeTyping(username)
+  })
+}
+
+function leaveSocket(id: string) {
+  const socket = getSocket()
+  socket.emit('leave-room', id)
+  socket.off('new-message')
+  socket.off('user-typing')
+  socket.off('user-stop-typing')
+  clearTyping()
+}
+
+// ── Data
 const canWrite = computed(() => {
   const me = roomInfo.value?.members.find(m => m.userId === auth.user?.id)
   return me?.canWrite ?? true
@@ -181,9 +248,12 @@ async function loadAll() {
 async function send() {
   if (!draft.value.trim() || sending.value) return
   sending.value = true
+  if (stopTypingTimer) { clearTimeout(stopTypingTimer); stopTypingTimer = null }
+  getSocket().emit('stop-typing', { roomId: roomId.value, username: auth.displayName })
   try {
     const { data } = await api.post<Message>(`/rooms/${roomId.value}/messages`, { content: draft.value.trim() })
-    messages.value.push(data)
+    // Own message added optimistically; socket broadcast handles other members
+    if (!messages.value.find(m => m.id === data.id)) messages.value.push(data)
     draft.value = ''
     await nextTick()
     anchor.value?.scrollIntoView({ behavior: 'smooth' })
@@ -236,10 +306,18 @@ function formatTime(iso: string) {
   return new Date(iso).toLocaleTimeString('pt-BR', { hour: '2-digit', minute: '2-digit' })
 }
 
-watch(roomId, loadAll)
+watch(roomId, (newId, oldId) => {
+  if (oldId) leaveSocket(oldId)
+  joinSocket(newId)
+  loadAll()
+})
+
 onMounted(async () => {
   await loadAll()
+  joinSocket(roomId.value)
   const { data } = await api.get<{ id: string; username: string }[]>('/users')
   allUsers.value = data
 })
+
+onUnmounted(() => leaveSocket(roomId.value))
 </script>

@@ -3,6 +3,8 @@ import { useAuthStore, buildAuthorizeUrl } from "@/stores/auth";
 import AuthCallback from "@/views/AuthCallback.vue";
 import WireLayout from "@/views/WireLayout.vue";
 import RoomView from "@/views/RoomView.vue";
+import UsersView from "@/views/UsersView.vue";
+import RequestsView from "@/views/RequestsView.vue";
 
 const EmptyRoom = { template: '<div class="flex h-screen items-center justify-center"><p class="font-mono text-pink-400/30 text-sm">Selecione uma sala ou inicie uma conversa.</p></div>' };
 
@@ -17,6 +19,8 @@ const router = createRouter({
       children: [
         { path: "", name: "home", component: EmptyRoom },
         { path: "rooms/:id", name: "room", component: RoomView },
+        { path: "users", name: "users", component: UsersView },
+        { path: "requests", name: "requests", component: RequestsView },
       ],
     },
   ],

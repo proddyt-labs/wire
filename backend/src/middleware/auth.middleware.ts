@@ -33,7 +33,7 @@ export const requireAuth: RequestHandler = async (req, res, next) => {
       res.status(401).json({ error: "Invalid or expired token" });
       return;
     }
-    const info = (await resp.json()) as { sub: string; username: string; email?: string };
+    const info = (await resp.json()) as { sub: string; username: string; email?: string; groups?: string[] };
 
     let user = await prisma.user.findUnique({ where: { gateId: info.sub } });
     if (!user) {
@@ -42,7 +42,13 @@ export const requireAuth: RequestHandler = async (req, res, next) => {
           gateId: info.sub,
           username: info.username,
           email: info.email ?? `${info.username}@gate.internal`,
+          groups: info.groups ?? [],
         },
+      });
+    } else if (info.groups) {
+      user = await prisma.user.update({
+        where: { id: user.id },
+        data: { groups: info.groups },
       });
     }
 

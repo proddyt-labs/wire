@@ -12,10 +12,13 @@ model User {
   gateId    String    @unique @map("gate_id")
   username  String    @unique
   email     String    @unique
+  groups    String[]  @default([])
   createdAt DateTime  @default(now()) @map("created_at")
 
-  memberships RoomMember[]
-  messages    Message[]
+  memberships       RoomMember[]
+  messages          Message[]
+  requestsSent      ConversationRequest[] @relation("RequestsSent")
+  requestsReceived  ConversationRequest[] @relation("RequestsReceived")
 
   @@map("users")
 }
@@ -23,6 +26,7 @@ model User {
 model Room {
   id        String   @id @default(uuid())
   name      String
+  type      String         @default("group") @map("type")
   isDirect  Boolean  @default(false) @map("is_direct")
   createdAt DateTime @default(now()) @map("created_at")
 
@@ -36,7 +40,8 @@ model RoomMember {
   roomId   String         @map("room_id")
   userId   String         @map("user_id")
   role     RoomMemberRole @default(MEMBER)
-  canWrite Boolean        @default(true) @map("can_write")
+  canWrite    Boolean        @default(true) @map("can_write")
+  unreadCount Int    @default(0) @map("unread_count")
   joinedAt DateTime       @default(now()) @map("joined_at")
 
   room Room @relation(fields: [roomId], references: [id], onDelete: Cascade)
@@ -63,4 +68,19 @@ model Message {
 
   @@index([roomId, createdAt])
   @@map("messages")
+}
+
+model ConversationRequest {
+  id         String   @id @default(uuid())
+  fromUserId String   @map("from_user_id")
+  toUserId   String   @map("to_user_id")
+  status     String   @default("pending")
+  createdAt  DateTime @default(now()) @map("created_at")
+  updatedAt  DateTime @updatedAt @map("updated_at")
+
+  fromUser User @relation("RequestsSent", fields: [fromUserId], references: [id])
+  toUser   User @relation("RequestsReceived", fields: [toUserId], references: [id])
+
+  @@unique([fromUserId, toUserId])
+  @@map("conversation_requests")
 }

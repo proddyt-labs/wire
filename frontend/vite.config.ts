@@ -12,6 +12,7 @@ export default defineConfig({
     port: 5176,
     proxy: {
       "/api": { target: "http://localhost:3003", changeOrigin: true },
+      "/socket.io": { target: "http://localhost:3003", changeOrigin: true, ws: true },
     },
   },
 });
